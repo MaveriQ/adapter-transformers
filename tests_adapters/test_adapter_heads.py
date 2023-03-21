@@ -409,7 +409,7 @@ class PredictionHeadModelTestMixin:
             nonlocal calls
             calls += 1
 
-        adapter = model.get_adapter("a")[0]["output_adapter"]
+        adapter = model.get_adapter("a")[0]["text_output_adapter"]
         adapter.register_forward_pre_hook(forward_pre_hook)
 
         with AdapterSetup("a"):

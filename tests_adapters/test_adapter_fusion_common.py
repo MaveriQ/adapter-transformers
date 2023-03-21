@@ -20,7 +20,7 @@ from transformers.testing_utils import require_torch, torch_device
 @require_torch
 class AdapterFusionModelTestMixin:
     def test_add_adapter_fusion(self):
-        config_name = "pfeiffer"
+        config_name = "harrys"
         adapter_config = AdapterConfig.load(config_name)
 
         for adater_fusion_config_name, adapter_fusion_config in ADAPTERFUSION_CONFIG_MAP.items():

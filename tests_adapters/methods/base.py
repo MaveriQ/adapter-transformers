@@ -4,7 +4,7 @@ import tempfile
 
 import torch
 
-from transformers import AutoTokenizer, TrainingArguments
+from transformers import default_data_collator, TrainingArguments
 from transformers.adapters.heads import CausalLMHead
 from transformers.adapters import ADAPTER_MODEL_MAPPING, AdapterSetup, AdapterTrainer, AutoAdapterModel
 from transformers.adapters.utils import WEIGHTS_NAME
@@ -203,6 +203,8 @@ class AdapterMethodBaseTestMixin:
             model=model,
             args=training_args,
             train_dataset=train_dataset,
+            data_collator=default_data_collator,
+            # tokenizer=tokenizer,
         )
         trainer.train()
 

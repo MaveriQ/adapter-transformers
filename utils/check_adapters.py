@@ -11,6 +11,7 @@ MODELS_WITH_ADAPTERS = [
     "xlm_roberta",
     "distilbert",
     "bart",
+    "lilt",
     "mbart",
     "gpt2",
     "gptj",

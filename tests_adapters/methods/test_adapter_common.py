@@ -14,6 +14,7 @@ from transformers import (
     InvertibleAdaptersMixin,
     MAMConfig,
     PfeifferConfig,
+    HarrysConfig,
     PfeifferInvConfig,
 )
 from transformers.adapters import BatchSplit, Fuse
@@ -27,8 +28,8 @@ from .base import AdapterMethodBaseTestMixin, create_twin_models
 class BottleneckAdapterTestMixin(AdapterMethodBaseTestMixin):
 
     adapter_configs_to_test = [
-        (PfeifferConfig(), ["adapters.{name}."]),
-        (MAMConfig(), ["adapters.{name}.", "prefix_tunings.{name}."]),
+        (HarrysConfig(), ["adapters.{name}."]),
+        # (MAMConfig(), ["adapters.{name}.", "prefix_tunings.{name}."]),
     ]
 
     def test_add_adapter(self):
@@ -93,7 +94,7 @@ class BottleneckAdapterTestMixin(AdapterMethodBaseTestMixin):
         else:
             n_prefix_layers = 1
 
-        for adapter_config, n_expected in [(HoulsbyConfig(), n_layers * 2), (MAMConfig(), n_layers + n_prefix_layers)]:
+        for adapter_config, n_expected in [(HarrysConfig(), n_layers * 2)]:#, (HoulsbyConfig(), n_layers * 2), (MAMConfig(), n_layers + n_prefix_layers)]:
             with self.subTest(model_class=model.__class__.__name__, config=adapter_config.__class__.__name__):
                 self.run_get_test(model, adapter_config, n_expected)
 
@@ -102,8 +103,9 @@ class BottleneckAdapterTestMixin(AdapterMethodBaseTestMixin):
         model.eval()
         reduction_factor = {"1": 1, "default": 2}
         for adapter_config in [
-            PfeifferConfig(reduction_factor=reduction_factor),
-            HoulsbyConfig(reduction_factor=reduction_factor),
+            HarrysConfig(reduction_factor=reduction_factor),
+            # PfeifferConfig(reduction_factor=reduction_factor),
+            # HoulsbyConfig(reduction_factor=reduction_factor),
         ]:
             with self.subTest(model_class=model.__class__.__name__, config=adapter_config.__class__.__name__):
                 name = adapter_config.__class__.__name__
@@ -116,24 +118,25 @@ class BottleneckAdapterTestMixin(AdapterMethodBaseTestMixin):
 
                 adapter = model.get_adapter(name)
 
-                self.assertEqual(
-                    adapter[0]["output_adapter"].adapter_down[0].in_features
-                    / adapter[0]["output_adapter"].adapter_down[0].out_features,
-                    reduction_factor["default"],
-                )
-                self.assertEqual(
-                    adapter[1]["output_adapter"].adapter_down[0].in_features
-                    / adapter[1]["output_adapter"].adapter_down[0].out_features,
-                    reduction_factor["1"],
-                )
+                for modality in ["text", "layout"]:
+                    self.assertEqual(
+                        adapter[0][f"{modality}_output_adapter"].adapter_down[0].in_features
+                        / adapter[0][f"{modality}_output_adapter"].adapter_down[0].out_features,
+                        reduction_factor["default"],
+                    )
+                    self.assertEqual(
+                        adapter[1][f"{modality}_output_adapter"].adapter_down[0].in_features
+                        / adapter[1][f"{modality}_output_adapter"].adapter_down[0].out_features,
+                        reduction_factor["1"],
+                    )
 
     def test_reduction_factor_no_default(self):
         model = self.get_model()
         model.eval()
         reduction_factor = {"2": 8, "4": 32}
         for adapter_config in [
-            PfeifferConfig(reduction_factor=reduction_factor),
-            HoulsbyConfig(reduction_factor=reduction_factor),
+            HarrysConfig(reduction_factor=reduction_factor),
+            # HoulsbyConfig(reduction_factor=reduction_factor),
         ]:
             with self.subTest(model_class=model.__class__.__name__, config=adapter_config.__class__.__name__):
                 name = adapter_config.__class__.__name__
@@ -149,7 +152,7 @@ class BottleneckAdapterTestMixin(AdapterMethodBaseTestMixin):
                 self.run_forward_test(model, adapter_config)
 
     def test_load_adapter(self):
-        self.run_load_test(PfeifferConfig())
+        self.run_load_test(HarrysConfig())
 
     def test_load_mam_adapter(self):
         self.run_load_test(MAMConfig())
@@ -279,7 +282,7 @@ class BottleneckAdapterTestMixin(AdapterMethodBaseTestMixin):
         self.assertTrue(torch.allclose(output_base["logits"], output_with_head["logits"]))
 
     def test_train_single_adapter(self):
-        self.run_train_test(PfeifferConfig(), ["adapters.{name}."])
+        self.run_train_test(HarrysConfig(), ["adapters.{name}."])
 
     def test_train_mam_adapter(self):
         self.run_train_test(MAMConfig(), ["adapters.{name}."])

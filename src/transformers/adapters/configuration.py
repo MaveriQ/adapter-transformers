@@ -220,6 +220,8 @@ class AdapterConfig(AdapterConfigBase):
     non_linearity: str
 
     # Options with defaults
+    text_output_adapter: bool = False
+    layout_output_adapter: bool = False
     original_ln_before: bool = False
     original_ln_after: bool = True
     ln_before: bool = False
@@ -279,6 +281,33 @@ class PfeifferConfig(AdapterConfig):
     non_linearity: str = "relu"
     reduction_factor: Union[float, Mapping] = 16
 
+@dataclass(eq=False)
+class HarrysConfig(AdapterConfig):
+    """
+    # The adapter architecture proposed by 
+    """
+
+    original_ln_before: bool = True
+    original_ln_after: bool = True
+    residual_before_ln: bool = True
+    adapter_residual_before_ln: bool = False
+    ln_before: bool = False
+    ln_after: bool = False
+    mh_adapter: bool = False
+    output_adapter: bool = False 
+    text_output_adapter: bool = True # For Lilt
+    layout_output_adapter: bool = True # For Lilt
+    non_linearity: str = "relu"
+    reduction_factor: Union[float, Mapping] = 16
+
+@dataclass(eq=False)
+class HarrysInvConfig(HarrysConfig):
+    """
+    The adapter architecture proposed by 
+    """
+
+    inv_adapter: Optional[str] = "nice"
+    inv_adapter_reduction_factor: Optional[float] = 2
 
 @dataclass(eq=False)
 class CompacterPlusPlusConfig(PfeifferConfig):
@@ -596,23 +625,25 @@ class UniPELTConfig(ConfigUnion):
 
 # IMPORTANT: When adding a new config here, also add it to adapter_docs/overview.md!
 ADAPTER_CONFIG_MAP = {
+    "harrys": HarrysConfig(),
+    "harrys+inv": HarrysInvConfig(),
     "pfeiffer": PfeifferConfig(),
     "houlsby": HoulsbyConfig(),
     "parallel": ParallelConfig(),
     "scaled_parallel": ParallelConfig(scaling="learned"),
     "pfeiffer+inv": PfeifferInvConfig(),
     "houlsby+inv": HoulsbyInvConfig(),
-    "compacter++": CompacterPlusPlusConfig(),
-    "compacter": CompacterConfig(),
-    "prefix_tuning": PrefixTuningConfig(),
-    "prefix_tuning_flat": PrefixTuningConfig(flat=True),
+    # "compacter++": CompacterPlusPlusConfig(),
+    # "compacter": CompacterConfig(),
+    # "prefix_tuning": PrefixTuningConfig(),
+    # "prefix_tuning_flat": PrefixTuningConfig(flat=True),
     "lora": LoRAConfig(),
     "ia3": IA3Config(),
-    "mam": MAMConfig(),
-    "unipelt": UniPELTConfig(),
+    # "mam": MAMConfig(),
+    # "unipelt": UniPELTConfig(),
 }
 
-DEFAULT_ADAPTER_CONFIG = "pfeiffer"
+DEFAULT_ADAPTER_CONFIG = "harrys"
 
 
 class ModelAdaptersConfig(Collection):

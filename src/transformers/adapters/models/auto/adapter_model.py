@@ -18,6 +18,7 @@ ADAPTER_MODEL_MAPPING_NAMES = OrderedDict(
         ("deberta-v2", "DebertaV2AdapterModel"),
         ("deberta", "DebertaAdapterModel"),
         ("bart", "BartAdapterModel"),
+        ("lilt", "LiltAdapterModel"),
         ("mbart", "MBartAdapterModel"),
         ("gpt2", "GPT2AdapterModel"),
         ("gptj", "GPTJAdapterModel"),
@@ -33,6 +34,7 @@ MODEL_WITH_HEADS_MAPPING_NAMES = OrderedDict(
         ("distilbert", "DistilBertModelWithHeads"),
         ("bart", "BartModelWithHeads"),
         ("mbart", "MBartModelWithHeads"),
+        ("lilt", "LiltModelWithHeads"),
         ("gpt2", "GPT2ModelWithHeads"),
         ("t5", "T5ModelWithHeads"),
     ]

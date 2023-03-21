@@ -54,6 +54,8 @@ _import_structure = {
         "ModelAdaptersConfig",
         "ParallelConfig",
         "PfeifferConfig",
+        "HarrysConfig",  
+        "HarrysInvConfig",
         "PfeifferInvConfig",
         "PrefixTuningConfig",
         "StaticAdapterFusionConfig",
@@ -118,6 +120,10 @@ _import_structure = {
         "MBartAdapterModel",
         "MBartModelWithHeads",
     ],
+    "models.lilt": [
+        "LiltAdapterModel",
+        "LiltModelWithHeads",
+    ],
     "models.roberta": [
         "RobertaAdapterModel",
         "RobertaModelWithHeads",
@@ -178,6 +184,8 @@ if TYPE_CHECKING:
         ModelAdaptersConfig,
         ParallelConfig,
         PfeifferConfig,
+        HarrysConfig,
+        HarrysInvConfig,
         PfeifferInvConfig,
         PrefixTuningConfig,
         StaticAdapterFusionConfig,

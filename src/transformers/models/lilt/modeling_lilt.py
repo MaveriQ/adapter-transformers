@@ -23,6 +23,16 @@ from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from ...activations import ACT2FN
+from ...adapters.composition import adjust_tensors_for_parallel
+from ...adapters.context import ForwardContext
+from ...adapters.lora import Linear as LoRALinear
+from ...adapters.mixins.bert import (
+    BertModelAdaptersMixin,
+    BertModelWithHeadsAdaptersMixin,
+    BertOutputAdaptersMixin,
+    BertSelfOutputAdaptersMixin,
+)
+from ...adapters.prefix_tuning import PrefixTuningShim
 from ...modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -190,7 +200,7 @@ class LiltLayoutEmbeddings(nn.Module):
 
 
 class LiltSelfAttention(nn.Module):
-    def __init__(self, config, position_embedding_type=None):
+    def __init__(self, config, position_embedding_type=None, location_key: Optional[str] = None):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
@@ -225,6 +235,8 @@ class LiltSelfAttention(nn.Module):
             self.distance_embedding = nn.Embedding(2 * config.max_position_embeddings - 1, self.attention_head_size)
 
         self.channel_shrink_ratio = config.channel_shrink_ratio
+
+        # self.prefix_tuning = PrefixTuningShim(location_key + "_prefix" if location_key else None, config)
 
     def transpose_for_scores(self, x, r=1):
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size // r)
@@ -280,6 +292,11 @@ class LiltSelfAttention(nn.Module):
             # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
             layout_attention_scores = layout_attention_scores + attention_mask
 
+        # key_layer, value_layer, attention_mask = self.prefix_tuning(
+        #     key_layer, value_layer, hidden_states, attention_mask
+        # )
+        # (query_layer,) = adjust_tensors_for_parallel(key_layer, query_layer)
+
         # Normalize the attention scores to probabilities.
         layout_attention_probs = nn.Softmax(dim=-1)(layout_attention_scores)
 
@@ -300,6 +317,11 @@ class LiltSelfAttention(nn.Module):
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
             attention_scores = attention_scores + attention_mask
+
+        # key_layer, value_layer, attention_mask = self.prefix_tuning(
+        #     key_layer, value_layer, hidden_states, attention_mask
+        # )
+        # (query_layer,) = adjust_tensors_for_parallel(key_layer, query_layer)
 
         # Normalize the attention scores to probabilities.
         attention_probs = nn.Softmax(dim=-1)(attention_scores)
@@ -328,24 +350,27 @@ class LiltSelfAttention(nn.Module):
 
 
 # Copied from transformers.models.bert.modeling_bert.BertSelfOutput
-class LiltSelfOutput(nn.Module):
+class LiltSelfOutput(BertSelfOutputAdaptersMixin, nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.config = config
+
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self._init_adapter_modules()
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        hidden_states = self.adapter_layer_forward(hidden_states, input_tensor, self.LayerNorm)
         return hidden_states
 
 
 class LiltAttention(nn.Module):
-    def __init__(self, config, position_embedding_type=None):
+    def __init__(self, config, position_embedding_type=None, location_key: Optional[str] = None):
         super().__init__()
-        self.self = LiltSelfAttention(config, position_embedding_type=position_embedding_type)
+        self.self = LiltSelfAttention(config, position_embedding_type=position_embedding_type, location_key=location_key)
         self.output = LiltSelfOutput(config)
         self.pruned_heads = set()
 
@@ -411,17 +436,20 @@ class LiltIntermediate(nn.Module):
 
 
 # Copied from transformers.models.bert.modeling_bert.BertOutput
-class LiltOutput(nn.Module):
-    def __init__(self, config):
-        super().__init__()
+class LiltOutput(BertOutputAdaptersMixin,nn.Module):
+    def __init__(self, config,modality):
+        super().__init__(modality)
+        self.config = config
+
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self._init_adapter_modules()
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        hidden_states = self.adapter_layer_forward(hidden_states, input_tensor, self.LayerNorm)
         return hidden_states
 
 
@@ -430,16 +458,16 @@ class LiltLayer(nn.Module):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.attention = LiltAttention(config)
+        self.attention = LiltAttention(config, location_key="self")
         self.intermediate = LiltIntermediate(config)
-        self.output = LiltOutput(config)
+        self.output = LiltOutput(config,modality="text")
 
         ori_hidden_size = config.hidden_size
         ori_intermediate_size = config.intermediate_size
         config.hidden_size = config.hidden_size // config.channel_shrink_ratio
         config.intermediate_size = config.intermediate_size // config.channel_shrink_ratio
         self.layout_intermediate = LiltIntermediate(config)
-        self.layout_output = LiltOutput(config)
+        self.layout_output = LiltOutput(config,modality="layout")
         config.hidden_size = ori_hidden_size
         config.intermediate_size = ori_intermediate_size
 
@@ -697,7 +725,7 @@ LILT_INPUTS_DOCSTRING = r"""
     "The bare LiLT Model transformer outputting raw hidden-states without any specific head on top.",
     LILT_START_DOCSTRING,
 )
-class LiltModel(LiltPreTrainedModel):
+class LiltModel(BertModelAdaptersMixin,LiltPreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     def __init__(self, config, add_pooling_layer=True):
@@ -710,6 +738,7 @@ class LiltModel(LiltPreTrainedModel):
 
         self.pooler = LiltPooler(config) if add_pooling_layer else None
 
+        self._init_adapter_modules()
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -729,6 +758,7 @@ class LiltModel(LiltPreTrainedModel):
 
     @add_start_docstrings_to_model_forward(LILT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @replace_return_docstrings(output_type=BaseModelOutputWithPooling, config_class=_CONFIG_FOR_DOC)
+    @ForwardContext.wrap
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -814,6 +844,7 @@ class LiltModel(LiltPreTrainedModel):
             token_type_ids=token_type_ids,
             inputs_embeds=inputs_embeds,
         )
+        embedding_output = self.invertible_adapters_forward(embedding_output)
 
         layout_embedding_output = self.layout_embeddings(bbox=bbox, position_ids=position_ids)
 
@@ -847,7 +878,7 @@ class LiltModel(LiltPreTrainedModel):
     """,
     LILT_START_DOCSTRING,
 )
-class LiltForSequenceClassification(LiltPreTrainedModel):
+class LiltForSequenceClassification(BertModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     # Copied from transformers.models.roberta.modeling_roberta.RobertaForSequenceClassification.__init__ with Roberta->Lilt, roberta->lilt
@@ -965,7 +996,7 @@ class LiltForSequenceClassification(LiltPreTrainedModel):
     """,
     LILT_START_DOCSTRING,
 )
-class LiltForTokenClassification(LiltPreTrainedModel):
+class LiltForTokenClassification(BertModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -973,6 +1004,7 @@ class LiltForTokenClassification(LiltPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
+        self.config = config
 
         self.lilt = LiltModel(config, add_pooling_layer=False)
         classifier_dropout = (
@@ -1092,7 +1124,7 @@ class LiltClassificationHead(nn.Module):
     """,
     LILT_START_DOCSTRING,
 )
-class LiltForQuestionAnswering(LiltPreTrainedModel):
+class LiltForQuestionAnswering(BertModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -1100,7 +1132,8 @@ class LiltForQuestionAnswering(LiltPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
-
+        self.config = config
+        
         self.lilt = LiltModel(config, add_pooling_layer=False)
         self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
 
