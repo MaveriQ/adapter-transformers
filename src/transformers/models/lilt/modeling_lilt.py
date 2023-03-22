@@ -26,13 +26,12 @@ from ...activations import ACT2FN
 from ...adapters.composition import adjust_tensors_for_parallel
 from ...adapters.context import ForwardContext
 from ...adapters.lora import Linear as LoRALinear
-from ...adapters.mixins.bert import (
-    BertModelAdaptersMixin,
-    BertModelWithHeadsAdaptersMixin,
-    BertOutputAdaptersMixin,
-    BertSelfOutputAdaptersMixin,
+from ...adapters.mixins.lilt import (
+    LiltModelAdaptersMixin,
+    LiltModelWithHeadsAdaptersMixin,
+    LiltOutputAdaptersMixin,
+    LiltSelfOutputAdaptersMixin,
 )
-from ...adapters.prefix_tuning import PrefixTuningShim
 from ...modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -350,7 +349,7 @@ class LiltSelfAttention(nn.Module):
 
 
 # Copied from transformers.models.bert.modeling_bert.BertSelfOutput
-class LiltSelfOutput(BertSelfOutputAdaptersMixin, nn.Module):
+class LiltSelfOutput(LiltSelfOutputAdaptersMixin, nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -436,9 +435,9 @@ class LiltIntermediate(nn.Module):
 
 
 # Copied from transformers.models.bert.modeling_bert.BertOutput
-class LiltOutput(BertOutputAdaptersMixin,nn.Module):
+class LiltOutput(LiltOutputAdaptersMixin,nn.Module):
     def __init__(self, config,modality):
-        super().__init__(modality)
+        super().__init__(modality,config)
         self.config = config
 
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
@@ -725,7 +724,7 @@ LILT_INPUTS_DOCSTRING = r"""
     "The bare LiLT Model transformer outputting raw hidden-states without any specific head on top.",
     LILT_START_DOCSTRING,
 )
-class LiltModel(BertModelAdaptersMixin,LiltPreTrainedModel):
+class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     def __init__(self, config, add_pooling_layer=True):
@@ -878,7 +877,7 @@ class LiltModel(BertModelAdaptersMixin,LiltPreTrainedModel):
     """,
     LILT_START_DOCSTRING,
 )
-class LiltForSequenceClassification(BertModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
+class LiltForSequenceClassification(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     # Copied from transformers.models.roberta.modeling_roberta.RobertaForSequenceClassification.__init__ with Roberta->Lilt, roberta->lilt
@@ -996,7 +995,7 @@ class LiltForSequenceClassification(BertModelWithHeadsAdaptersMixin,LiltPreTrain
     """,
     LILT_START_DOCSTRING,
 )
-class LiltForTokenClassification(BertModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
+class LiltForTokenClassification(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -1124,7 +1123,7 @@ class LiltClassificationHead(nn.Module):
     """,
     LILT_START_DOCSTRING,
 )
-class LiltForQuestionAnswering(BertModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
+class LiltForQuestionAnswering(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 

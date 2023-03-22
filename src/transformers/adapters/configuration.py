@@ -220,8 +220,9 @@ class AdapterConfig(AdapterConfigBase):
     non_linearity: str
 
     # Options with defaults
-    text_output_adapter: bool = False
-    layout_output_adapter: bool = False
+    text_output_adapter: bool = False # For Lilt
+    layout_output_adapter: bool = False # For Lilt
+    channel_shrink_ratio: int = 4 # For Lilt
     original_ln_before: bool = False
     original_ln_after: bool = True
     ln_before: bool = False
@@ -297,6 +298,7 @@ class HarrysConfig(AdapterConfig):
     output_adapter: bool = False 
     text_output_adapter: bool = True # For Lilt
     layout_output_adapter: bool = True # For Lilt
+    channel_shrink_ratio: int = 4 # For Lilt
     non_linearity: str = "relu"
     reduction_factor: Union[float, Mapping] = 16
 
