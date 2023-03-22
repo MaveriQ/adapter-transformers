@@ -1,10 +1,10 @@
 from datasets import load_dataset
 from transformers.adapters import AdapterTrainer, HarrysConfig
-from transformers import default_data_collator, TrainingArguments, AutoTokenizer, AutoAdapterModel, LiltAdapterModel
+from transformers import default_data_collator, TrainingArguments, AutoTokenizer, AutoAdapterModel, LiltModelForPretraining
 from torch.utils.data import DataLoader
 
 adapter_config = HarrysConfig()
-model = LiltAdapterModel.from_pretrained("SCUT-DLVCLab/lilt-infoxlm-base")
+model = LiltModelForPretraining.from_pretrained("SCUT-DLVCLab/lilt-infoxlm-base")
 
 model.add_adapter("ner", config=adapter_config)
 model.train_adapter("ner")

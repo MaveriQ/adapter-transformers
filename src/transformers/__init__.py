@@ -1665,6 +1665,7 @@ else:
             "LiltForQuestionAnswering",
             "LiltForSequenceClassification",
             "LiltForTokenClassification",
+            "LiltForPretraining",
             "LiltModel",
             "LiltPreTrainedModel",
         ]
@@ -4947,6 +4948,7 @@ if TYPE_CHECKING:
             LiltForQuestionAnswering,
             LiltForSequenceClassification,
             LiltForTokenClassification,
+            LiltForPretraining,
             LiltModel,
             LiltPreTrainedModel,
         )

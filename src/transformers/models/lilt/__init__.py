@@ -37,6 +37,7 @@ else:
         "LiltForSequenceClassification",
         "LiltForTokenClassification",
         "LiltModel",
+        "LiltForPretraining",
         "LiltPreTrainedModel",
     ]
 
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
             LiltForSequenceClassification,
             LiltForTokenClassification,
             LiltModel,
+            LiltForPretraining,
             LiltPreTrainedModel,
         )
 

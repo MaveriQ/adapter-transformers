@@ -22,7 +22,7 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from ...activations import ACT2FN
+from ...activations import ACT2FN, gelu
 from ...adapters.composition import adjust_tensors_for_parallel
 from ...adapters.context import ForwardContext
 from ...adapters.lora import Linear as LoRALinear
@@ -33,6 +33,7 @@ from ...adapters.mixins.lilt import (
     LiltSelfOutputAdaptersMixin,
 )
 from ...modeling_outputs import (
+    MaskedLMOutput,
     BaseModelOutput,
     BaseModelOutputWithPooling,
     QuestionAnsweringModelOutput,
@@ -41,16 +42,18 @@ from ...modeling_outputs import (
 )
 from ...modeling_utils import PreTrainedModel
 from ...pytorch_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
-from ...utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
+from ...utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings, add_code_sample_docstrings
 from .configuration_lilt import LiltConfig
 
 
 logger = logging.get_logger(__name__)
 
+_CHECKPOINT_FOR_DOC = "SCUT-DLVCLab/lilt-infoxlm-base"
 _CONFIG_FOR_DOC = "LiltConfig"
 
 LILT_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "SCUT-DLVCLab/lilt-roberta-en-base",
+    "SCUT-DLVCLab/lilt-infoxlm-base"
     # See all LiLT models at https://huggingface.co/models?filter=lilt
 ]
 
@@ -760,8 +763,8 @@ class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
     @ForwardContext.wrap
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        bbox: Optional[torch.Tensor] = None,
+        input_ids: torch.Tensor,
+        bbox: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
@@ -812,8 +815,8 @@ class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
         batch_size, seq_length = input_shape
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
-        if bbox is None:
-            bbox = torch.zeros(input_shape + (4,), dtype=torch.long, device=device)
+        # if bbox is None:
+        #     bbox = torch.zeros(input_shape + (4,), dtype=torch.long, device=device)
 
         if attention_mask is None:
             attention_mask = torch.ones(((batch_size, seq_length)), device=device)
@@ -869,6 +872,146 @@ class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
             attentions=encoder_outputs.attentions,
         )
 
+class TokenClassificationHead(nn.Module):
+    """Token Classification Head for Pretraining."""
+
+    def __init__(self, config,num_labels):
+        super().__init__()
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+
+        self.decoder = nn.Linear(config.hidden_size, num_labels)
+        self.bias = nn.Parameter(torch.zeros(num_labels))
+        self.decoder.bias = self.bias
+
+    def forward(self, features, **kwargs):
+        x = self.dense(features)
+        x = gelu(x)
+        x = self.layer_norm(x)
+
+        # project back to size of vocabulary with bias
+        x = self.decoder(x)
+        return x
+    
+class LiltPretrainingHead(nn.Module): # TODO : Haris - Fix it
+    """Lilt Head for pretraining tasks."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.mvlm_head = TokenClassificationHead(config, config.vocab_size)
+        self.kpl_head = TokenClassificationHead(config, num_labels=300) # To classify 3 locations in 10x10 grid
+        self.cai_head = TokenClassificationHead(config, num_labels=2) # For align/not align
+
+    def forward(self, features, **kwargs):
+        mvlm_logits = self.mvlm_head(features)
+        kpl_logits = self.kpl_head(features)
+        cai_logits = self.cai_head(features)
+
+        return {"mvlm_logits": mvlm_logits, "kpl_logits": kpl_logits, "cai_logits": cai_logits}
+
+    def _tie_weights(self):
+        # To tie those two weights if they get disconnected (on TPU or when the bias is resized)
+        # For accelerate compatibility and to not break backward compatibility
+        if self.mvlm_head.decoder.bias.device.type == "meta":
+            self.mvlm_head.decoder.bias = self.bias
+        else:
+            self.bias = self.mvlm_head.decoder.bias
+
+@add_start_docstrings(
+    """LiLT Model with MVLM, CAI, KPL heads on top for Pretraining.""", LILT_START_DOCSTRING
+)
+class LiltForPretraining(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
+    _keys_to_ignore_on_save = [r"lm_head.decoder.weight", r"lm_head.decoder.bias"]
+    _keys_to_ignore_on_load_missing = [r"position_ids", r"lm_head.decoder.weight", r"lm_head.decoder.bias"]
+    _keys_to_ignore_on_load_unexpected = [r"pooler"]
+
+    def __init__(self, config):
+        super().__init__(config)
+
+        self.lilt = LiltModel(config, add_pooling_layer=False)
+        self.lm_head = LiltPretrainingHead(config)
+
+        # The LM head weights require special treatment only when they are tied with the word embeddings
+        self.update_keys_to_ignore(config, ["lm_head.decoder.weight"])
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def get_output_embeddings(self):
+        return self.lm_head.mvlm_head.decoder
+
+    def set_output_embeddings(self, new_embeddings):
+        self.lm_head.mvlm_head.decoder = new_embeddings
+
+    @add_start_docstrings_to_model_forward(LILT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
+    # @replace_return_docstrings(output_type=MaskedLMOutput, config_class=_CONFIG_FOR_DOC) TODO : Fox docstring error
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        bbox: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        input_labels: Optional[torch.LongTensor] = None,
+        bbox_labels: Optional[torch.Tensor] = None,
+        bbox_loc: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
+        r"""
+        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+            Labels for computing the masked language modeling loss. Indices should be in `[-100, 0, ...,
+            config.vocab_size]` (see `input_ids` docstring) Tokens with indices set to `-100` are ignored (masked), the
+            loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`
+        kwargs (`Dict[str, any]`, optional, defaults to *{}*):
+            Used to hide legacy arguments that have been deprecated.
+        """
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.lilt(
+            input_ids,
+            bbox,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        sequence_output = outputs[0]
+        prediction_scores = self.lm_head(sequence_output)
+
+        loss_fct = CrossEntropyLoss()
+
+        masked_lm_loss = None
+        if input_labels is not None:
+            masked_lm_loss = loss_fct(prediction_scores['mvlm_logits'].view(-1, self.config.vocab_size), input_labels.view(-1))
+
+        kpl_loss = None
+        if bbox_loc is not None:
+            kpl_loss = loss_fct(prediction_scores['kpl_logits'].view(-1, 100), bbox_loc.view(-1)) # For 10x10 grid classification
+
+        cai_loss = None
+        if bbox_labels is not None:
+            cai_loss = loss_fct(prediction_scores['cai_logits'].view(-1, 2), bbox_labels.view(-1)) # For align/not align
+
+        total_loss = masked_lm_loss + kpl_loss + cai_loss
+
+        if not return_dict:
+            output = (prediction_scores,) + outputs[2:]
+            return ((total_loss,) + output) if total_loss is not None else output
+
+        return MaskedLMOutput(
+            loss=total_loss,
+            logits=prediction_scores,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
 
 @add_start_docstrings(
     """

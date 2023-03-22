@@ -39,7 +39,8 @@ class LiltAdapterModel(EmbeddingAdaptersWrapperMixin, ModelWithFlexibleHeadsAdap
     @add_start_docstrings_to_model_forward(LILT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     def forward(
         self,
-        input_ids=None,
+        input_ids,
+        bbox,
         attention_mask=None,
         token_type_ids=None,
         position_ids=None,
@@ -67,6 +68,7 @@ class LiltAdapterModel(EmbeddingAdaptersWrapperMixin, ModelWithFlexibleHeadsAdap
 
         outputs = self.lilt(
             input_ids,
+            bbox,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,

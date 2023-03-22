@@ -16,24 +16,24 @@ from ..model_mixin import (
 logger = logging.getLogger(__name__)
 
 
-# For backwards compatibility, BertSelfOutput inherits directly from AdapterLayer
+# For backwards compatibility, LiltSelfOutput inherits directly from AdapterLayer
 class LiltSelfOutputAdaptersMixin(AdapterLayer):
-    """Adds adapters to the BertSelfOutput module."""
+    """Adds adapters to the LiltSelfOutput module."""
 
     def __init__(self):
         super().__init__("mh_adapter", None)
 
 
-# For backwards compatibility, BertOutput inherits directly from AdapterLayer
+# For backwards compatibility, LiltOutput inherits directly from AdapterLayer
 class LiltOutputAdaptersMixin(AdapterLayer):
-    """Adds adapters to the BertOutput module."""
+    """Adds adapters to the LiltOutput module."""
 
     def __init__(self, modality,config):
         super().__init__(f"{modality}_output_adapter", config)
 
 
 class LiltModelAdaptersMixin(EmbeddingAdaptersMixin, InvertibleAdaptersMixin, ModelAdaptersMixin):
-    """Adds adapters to the BertModel module."""
+    """Adds adapters to the LiltModel module."""
 
     def iter_layers(self) -> Iterable[Tuple[int, nn.Module]]:
         for i, layer in enumerate(self.encoder.layer):
