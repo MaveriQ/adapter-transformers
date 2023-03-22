@@ -25,6 +25,7 @@ from .data_collator import (
     DataCollatorForWholeWordMask,
     DataCollatorWithPadding,
     DefaultDataCollator,
+    DataCollatorForLiltPretraining,
     default_data_collator,
 )
 from .metrics import glue_compute_metrics, xnli_compute_metrics

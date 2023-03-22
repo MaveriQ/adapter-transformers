@@ -1,17 +1,17 @@
 from datasets import load_dataset
 from transformers.adapters import AdapterTrainer, HarrysConfig
-from transformers import default_data_collator, TrainingArguments, AutoTokenizer, AutoAdapterModel, LiltModelForPretraining
+from transformers import DataCollatorForLiltPretraining, TrainingArguments, AutoTokenizer, AutoAdapterModel, LiltForPretraining
 from torch.utils.data import DataLoader
 
 adapter_config = HarrysConfig()
-model = LiltModelForPretraining.from_pretrained("SCUT-DLVCLab/lilt-infoxlm-base")
+model = LiltForPretraining.from_pretrained("SCUT-DLVCLab/lilt-infoxlm-base")
 
 model.add_adapter("ner", config=adapter_config)
 model.train_adapter("ner")
 
 dataset = load_dataset("nielsr/funsd-layoutlmv3",split='train')
-
 tokenizer = AutoTokenizer.from_pretrained("SCUT-DLVCLab/lilt-infoxlm-base")
+collator = DataCollatorForLiltPretraining(tokenizer)
 
 def prepare_examples(batch):
     encoding = tokenizer(batch["tokens"],
@@ -20,15 +20,17 @@ def prepare_examples(batch):
                         padding="max_length",
                         max_length=128,
                         truncation=True,
-                        return_tensors="pt")
+                        return_tensors="pt",
+                        return_special_tokens_mask=True)
 
+    encoding.pop("labels")
     return encoding
 
 dataset.set_transform(prepare_examples)
-loader = DataLoader(dataset, batch_size=2, collate_fn=default_data_collator)
+loader = DataLoader(dataset, batch_size=2, collate_fn=collator)
 
 batch = next(iter(loader))
-
+print(batch.keys())
 # for name, param in model.named_parameters():
 #     if param.requires_grad:
 #         print(name)
@@ -51,6 +53,8 @@ trainer = AdapterTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
-    data_collator=default_data_collator,
+    data_collator=collator,
     # tokenizer=tokenizer,
 )
+
+trainer.train()
