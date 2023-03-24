@@ -31,6 +31,14 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
+from ...adapters.composition import adjust_tensors_for_parallel
+from ...adapters.context import ForwardContext
+from ...adapters.lora import Linear as LoRALinear
+from ..layer import AdapterLayer
+from ...adapters.mixins.lilt import (
+    LiltModelAdaptersMixin,
+    LiltModelWithHeadsAdaptersMixin,
+)
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 
@@ -466,17 +474,20 @@ class LayoutLMv3SelfAttention(nn.Module):
 
 
 # Copied from transformers.models.roberta.modeling_roberta.RobertaSelfOutput
-class LayoutLMv3SelfOutput(nn.Module):
+class LayoutLMv3SelfOutput(AdapterLayer,nn.Module):
     def __init__(self, config):
-        super().__init__()
+        super().__init__("mh_adapter",config)
+        self.config = config
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
+        self._init_adapter_modules()
+
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        hidden_states = self.adapter_layer_forward(hidden_states, input_tensor, self.LayerNorm)
         return hidden_states
 
 
@@ -509,6 +520,39 @@ class LayoutLMv3Attention(nn.Module):
         return outputs
 
 
+# Copied from transformers.models.roberta.modeling_roberta.RobertaIntermediate
+class LayoutLMv3Intermediate(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
+        if isinstance(config.hidden_act, str):
+            self.intermediate_act_fn = ACT2FN[config.hidden_act]
+        else:
+            self.intermediate_act_fn = config.hidden_act
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.intermediate_act_fn(hidden_states)
+        return hidden_states
+
+
+# Copied from transformers.models.roberta.modeling_roberta.RobertaOutput
+class LayoutLMv3Output(AdapterLayer,nn.Module):
+    def __init__(self, config):
+        super().__init__("output_adapter", config)
+        self.config = config
+        self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+        self._init_adapter_modules()
+
+    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = self.adapter_layer_forward(hidden_states, input_tensor, self.LayerNorm)
+
+        return hidden_states
 # Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Layer with LayoutLMv2->LayoutLMv3
 class LayoutLMv3Layer(nn.Module):
     def __init__(self, config):
@@ -715,43 +759,11 @@ class LayoutLMv3Encoder(nn.Module):
             attentions=all_self_attentions,
         )
 
-
-# Copied from transformers.models.roberta.modeling_roberta.RobertaIntermediate
-class LayoutLMv3Intermediate(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
-        if isinstance(config.hidden_act, str):
-            self.intermediate_act_fn = ACT2FN[config.hidden_act]
-        else:
-            self.intermediate_act_fn = config.hidden_act
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.intermediate_act_fn(hidden_states)
-        return hidden_states
-
-
-# Copied from transformers.models.roberta.modeling_roberta.RobertaOutput
-class LayoutLMv3Output(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
-    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
-        return hidden_states
-
-
 @add_start_docstrings(
     "The bare LayoutLMv3 Model transformer outputting raw hidden-states without any specific head on top.",
     LAYOUTLMV3_START_DOCSTRING,
 )
-class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
+class LayoutLMv3Model(LayoutLMv3ModelAdaptersMixin,LayoutLMv3PreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     def __init__(self, config):
@@ -780,6 +792,8 @@ class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
             self.norm = nn.LayerNorm(config.hidden_size, eps=1e-6)
 
         self.encoder = LayoutLMv3Encoder(config)
+
+        self._init_adapter_modules()
 
         self.init_weights()
 
@@ -919,6 +933,8 @@ class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
                 inputs_embeds=inputs_embeds,
             )
 
+            embedding_output = self.invertible_adapters_forward(embedding_output)
+
         final_bbox = final_position_ids = None
         patch_height = patch_width = None
         if pixel_values is not None:
@@ -1039,7 +1055,7 @@ class LayoutLMv3ClassificationHead(nn.Module):
     """,
     LAYOUTLMV3_START_DOCSTRING,
 )
-class LayoutLMv3ForTokenClassification(LayoutLMv3PreTrainedModel):
+class LayoutLMv3ForTokenClassification(LayoutLMv3ModelWithHeadsAdaptersMixin,LayoutLMv3PreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -1154,7 +1170,7 @@ class LayoutLMv3ForTokenClassification(LayoutLMv3PreTrainedModel):
     """,
     LAYOUTLMV3_START_DOCSTRING,
 )
-class LayoutLMv3ForQuestionAnswering(LayoutLMv3PreTrainedModel):
+class LayoutLMv3ForQuestionAnswering(LayoutLMv3ModelWithHeadsAdaptersMixin,LayoutLMv3PreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -1287,7 +1303,7 @@ class LayoutLMv3ForQuestionAnswering(LayoutLMv3PreTrainedModel):
     """,
     LAYOUTLMV3_START_DOCSTRING,
 )
-class LayoutLMv3ForSequenceClassification(LayoutLMv3PreTrainedModel):
+class LayoutLMv3ForSequenceClassification(LayoutLMv3ModelWithHeadsAdaptersMixin,LayoutLMv3PreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     def __init__(self, config):
