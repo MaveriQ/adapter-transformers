@@ -124,6 +124,10 @@ _import_structure = {
         "LiltAdapterModel",
         "LiltModelWithHeads",
     ],
+    "models.layoutlmv3": [
+        "LayoutLMv3AdapterModel",
+        "LayoutLMv3ModelWithHeads",
+    ],
     "models.roberta": [
         "RobertaAdapterModel",
         "RobertaModelWithHeads",

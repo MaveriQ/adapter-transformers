@@ -124,6 +124,16 @@ class AdapterMethodBaseTestMixin:
         self.assertGreaterEqual(len(output_1), len(base_output))
         self.assertFalse(torch.equal(output_1[0], base_output[0]))
 
+        # verify the logits of base_output
+        expected_shape = torch.Size((1, 199, 768))
+        self.assertEqual(base_output.last_hidden_state.shape, expected_shape)
+
+        expected_slice = torch.tensor(
+            [[-0.0529, 0.3618, 0.1632], [-0.1587, -0.1667, -0.0400], [-0.1557, -0.1671, -0.0505]]
+        ).to(torch_device)
+
+        self.assertTrue(torch.allclose(base_output.last_hidden_state[0, :3, :3], expected_slice, atol=1e-4))
+
     def run_load_test(self, adapter_config):
         model1, model2 = create_twin_models(self.model_class, self.config)
 
@@ -184,6 +194,15 @@ class AdapterMethodBaseTestMixin:
             output2 = model2(**input_data)
         self.assertEqual(len(output1), len(output2))
         self.assertTrue(torch.equal(output1[0], output2[0]))
+        # verify the logits
+        expected_shape = torch.Size((1, 199, 768))
+        self.assertEqual(output1.last_hidden_state.shape, expected_shape)
+
+        expected_slice = torch.tensor(
+            [[-0.0529, 0.3618, 0.1632], [-0.1587, -0.1667, -0.0400], [-0.1557, -0.1671, -0.0505]]
+        ).to(torch_device)
+
+        self.assertTrue(torch.allclose(output1.last_hidden_state[0, :3, :3], expected_slice, atol=1e-4))
 
     def trainings_run(self, model, lr=1.0, steps=8):
         # setup dataset

@@ -34,10 +34,10 @@ from transformers.modeling_outputs import (
 from ...adapters.composition import adjust_tensors_for_parallel
 from ...adapters.context import ForwardContext
 from ...adapters.lora import Linear as LoRALinear
-from ..layer import AdapterLayer
-from ...adapters.mixins.lilt import (
-    LiltModelAdaptersMixin,
-    LiltModelWithHeadsAdaptersMixin,
+from ...adapters.layer import AdapterLayer
+from ...adapters.mixins.layoutlmv3 import (
+    LayoutLMv3ModelAdaptersMixin,
+    LayoutLMv3ModelWithHeadsAdaptersMixin,
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
