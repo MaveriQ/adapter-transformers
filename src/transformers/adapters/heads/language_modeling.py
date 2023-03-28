@@ -1,5 +1,5 @@
 import torch.nn as nn
-
+import torch
 from ...modeling_outputs import CausalLMOutput, CausalLMOutputWithPast, MaskedLMOutput, Seq2SeqLMOutput
 from ..modeling import Activation_Function_Class
 from .base import PredictionHead
@@ -201,3 +201,77 @@ class BertStyleMaskedLMHead(CausalLMHead):
             hidden_states=base_outputs.hidden_states,
             attentions=base_outputs.attentions,
         )
+
+class LiltTokenClassificationHead(PredictionHead):
+    def __init__(
+        self,
+        model,
+        head_name,
+        num_labels,
+        head_type = "classification",
+        embedding_size=None,
+        layers=1,
+        activation_function=None,
+        layer_norm=True,
+        bias=False,
+        shift_labels=False,
+    ):
+        super(LiltTokenClassificationHead, self).__init__(head_name)
+        self.config = {
+            "head_type": head_type,
+            "num_labels": num_labels,
+            "embedding_size": embedding_size or getattr(model.config, "embedding_size", model.config.hidden_size),
+            "layers": layers,
+            "activation_function": activation_function,
+            "layer_norm": layer_norm,
+            "bias": bias,
+            "shift_labels": shift_labels,
+            "label2id": None,
+        }
+        self.build(model)
+
+class TokenClassificationHead(nn.Module):
+    """Token Classification Head for Pretraining."""
+
+    def __init__(self, config,num_labels):
+        super().__init__()
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.nonlinearity = Activation_Function_Class("gelu")
+        self.decoder = nn.Linear(config.hidden_size, num_labels)
+        self.bias = nn.Parameter(torch.zeros(num_labels))
+        self.decoder.bias = self.bias
+
+    def forward(self, features, **kwargs):
+        x = self.dense(features)
+        x = self.nonlinearity(x)
+        x = self.layer_norm(x)
+        x = self.decoder(x)
+        return x
+    
+class LiltPretrainingHead(nn.Module):
+    """Lilt Head for pretraining tasks."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.mvlm_head = LiltTokenClassificationHead(head_name='mvlm_head',
+                                                     num_labels=config.vocab_size)
+        self.kpl_head = TokenClassificationHead(head_name='kpl_head',
+                                                num_labels=300) # To classify 3 locations in 10x10 grid
+        self.cai_head = TokenClassificationHead(head_name='cai_head',
+                                                num_labels=2) # For align/not align
+
+    def forward(self, features, **kwargs):
+        mvlm_logits = self.mvlm_head(features)
+        kpl_logits = self.kpl_head(features)
+        cai_logits = self.cai_head(features)
+
+        return {"mvlm_logits": mvlm_logits, "kpl_logits": kpl_logits, "cai_logits": cai_logits}
+
+    def _tie_weights(self): # TODO : Haris - Fix the decoder reference
+        # To tie those two weights if they get disconnected (on TPU or when the bias is resized)
+        # For accelerate compatibility and to not break backward compatibility
+        if self.mvlm_head.decoder.bias.device.type == "meta":
+            self.mvlm_head.decoder.bias = self.bias
+        else:
+            self.bias = self.mvlm_head.decoder.bias
