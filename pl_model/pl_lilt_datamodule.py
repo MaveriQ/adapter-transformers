@@ -1,4 +1,4 @@
-from pytorch_lightning import LightningDataModule
+from lightning import LightningDataModule
 from datasets import load_dataset, load_from_disk
 from torch.utils.data import DataLoader
 from transformers import LayoutXLMProcessor, DataCollatorForLiltPretraining
@@ -17,7 +17,7 @@ class LiLTDataModule(LightningDataModule):
         super().__init__()
         self.save_hyperparameters()
         self.args = args
-        self.dataset = load_from_disk('rvl_cdip_fixed') # get_dataset() #load_dataset('rvl_cdip')#,split=['train','validation'])
+        self.dataset = load_from_disk('/home/hj36wegi/scratch/data/rvl_cdip_fixed') # get_dataset() #load_dataset('rvl_cdip')#,split=['train','validation'])
         self.processor = LayoutXLMProcessor.from_pretrained("microsoft/layoutxlm-base")
         # self.dataset.set_transform(self.processor)
         self.collator = DataCollatorForLiltPretraining(self.processor.tokenizer)
@@ -39,9 +39,9 @@ class LiLTDataModule(LightningDataModule):
         self.label2id = {k: v for v, k in enumerate(self.labels)}
 
         print(f'Filtering dataset for category : {self.args.category}\n')
-        self.dataset = self.dataset.filter(lambda e: e['label']==self.label2id[self.args.category], batched=False,num_proc=6)
+        self.dataset = self.dataset.filter(lambda e: e['label']==self.label2id[self.args.category], batched=False,num_proc=32)
         print('Extracting features from dataset\n')
-        self.dataset = self.dataset.map(self.preprocess_data, batched=True,remove_columns=['image'],num_proc=6)
+        self.dataset = self.dataset.map(self.preprocess_data, batched=True,remove_columns=['image'],num_proc=32)
 
     def setup(self, stage: Optional[str] = None):
         pass

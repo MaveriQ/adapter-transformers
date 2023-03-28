@@ -1,6 +1,6 @@
 import argparse
-from pytorch_lightning import LightningModule, Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint
+from lightning import LightningModule, Trainer
+from lightning.pytorch.callbacks import ModelCheckpoint
 import torch
 from transformers.models.lilt.modeling_lilt import LiltForPretraining
 from pl_lilt_datamodule import LiLTDataModule
@@ -10,7 +10,7 @@ class LiLTModel(LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.args = args
-        self.model = LiltForPretraining.from_pretrained("nielsr/lilt-xlm-roberta-base", id2label=args.id2label)
+        self.model = LiltForPretraining.from_pretrained("nielsr/lilt-xlm-roberta-base")
 
     def forward(self, input_ids, bbox, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None, labels=None):
 
@@ -46,8 +46,7 @@ class LiLTModel(LightningModule):
     
     def add_model_specific_args(parent_parser):
         parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--batch_size', type=int, default=16)
-        parser.add_argument('--category', type=int, default=0,choices=range(16))
+
         return parser
 
 def parse_args():
