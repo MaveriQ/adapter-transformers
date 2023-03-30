@@ -5,10 +5,13 @@ from typing import List, Dict, Optional, Any, Mapping, Tuple, Union
 import torch
 import numpy as np
 
+
+
 @dataclass
 class DataCollatorForLiltPretraining(DataCollatorMixin):
 
     tokenizer: PreTrainedTokenizerBase
+    seq_len : int = 512
     mlm: bool = True
     mlm_probability: float = 0.15
     pad_to_multiple_of: Optional[int] = None
@@ -22,10 +25,50 @@ class DataCollatorForLiltPretraining(DataCollatorMixin):
                 "You should pass `mlm=False` to train on causal language modeling instead."
             )
 
+        self.pad_tokens = {'input_ids':self.tokenizer.pad_token_id,
+                            'attention_mask':0,
+                            'special_tokens_mask':1,
+                            'bbox':0}
+
+    def pad(self,examples,key,pad_token_id):
+
+        # Tensorize if necessary.
+        if isinstance(examples[0], (list, tuple, np.ndarray)):
+            examples = [torch.tensor(e, dtype=torch.long) for e in examples]
+
+        if key=='bbox':
+            output_shape = (self.bs,self.seq_len,4)
+        else:
+            output_shape = (self.bs,self.seq_len)
+
+        output = torch.full(output_shape,pad_token_id)
+        
+        for i,example in enumerate(examples):
+            ex_length = min(self.seq_len,example.shape[1]) # Truncate if greater than seq_len.
+            if self.tokenizer.padding_side == "right":
+                output[i, : ex_length] = example[:,:ex_length] # For Truncation
+            else:
+                output[i, -ex_length :] = example[:,:ex_length]
+        return output
+
+    def collate_fn(self,examples):
+
+        # Convert list of encodings to dict of ragged tensors
+        batch = {k:[ex[k] for ex in examples] for k in examples[0].keys()}
+        collated = {}
+        
+        for key in batch.keys():
+            if key not in self.pad_tokens.keys():
+                continue
+            collated[key] = self.pad(batch[key],key,self.pad_tokens[key])
+            
+        return collated
+    
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+        self.bs = len(examples)
         # Handle dict or lists with proper padding and conversion to tensor.
         if isinstance(examples[0], Mapping):
-            batch = self.tokenizer.pad(examples, return_tensors="pt", pad_to_multiple_of=self.pad_to_multiple_of)
+            batch = self.collate_fn(examples)
         else:
             batch = {
                 "input_ids": _torch_collate_batch(examples, self.tokenizer, pad_to_multiple_of=self.pad_to_multiple_of)
@@ -131,3 +174,15 @@ class DataCollatorForLiltPretraining(DataCollatorMixin):
 
         return masked_indices,indices_replaced,indices_random, misaligned_indices, aligned_indices
   
+if __name__ == '__main__':
+    from datasets import load_from_disk
+    from transformers import LayoutXLMProcessor
+
+    dataset = load_from_disk('/work/scratch/hj36wegi/data/rvl_cdip_processed')
+    tokenizer = LayoutXLMProcessor.from_pretrained("microsoft/layoutxlm-base").tokenizer
+
+    bs = 4
+    examples = [dataset['train'][i] for i in range(bs)]
+    collate_fn = DataCollatorForLiltPretraining(tokenizer = tokenizer ,mlm_probability = 0.15,mlm = True)
+    batch = collate_fn(examples)
+    print(batch)
