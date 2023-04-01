@@ -1,7 +1,7 @@
-from lightning import LightningDataModule
+from pytorch_lightning import LightningDataModule
 from datasets import load_dataset, load_from_disk
 from torch.utils.data import DataLoader, random_split
-from transformers import LayoutXLMProcessor, AutoTokenizer
+from transformers import LayoutLMv2ImageProcessor, LayoutXLMTokenizerFast, AutoTokenizer
 from data_collator import DataCollatorForLiltPretraining
 import argparse
 from typing import Optional
@@ -18,11 +18,35 @@ class LiltPretrainingDataModule(LightningDataModule):
         super().__init__()
         self.save_hyperparameters()
         self.args = args
-        dataset = load_from_disk(f'{self.args.data_dir}/rvl_cdip_processed')
-        self.dataset = dataset.remove_columns(['image','category','words'])
-        self.processor = LayoutXLMProcessor.from_pretrained("microsoft/layoutxlm-base", seq_len = self.args.seq_len)
-        # self.dataset.set_transform(self.processor)
-        self.collator = DataCollatorForLiltPretraining(self.processor.tokenizer)
+        self.dataset = load_dataset('rvl_cdip')
+        self.tokenizer = LayoutXLMTokenizerFast.from_pretrained("SCUT-DLVCLab/lilt-infoxlm-base")
+        self.img_processor = LayoutLMv2ImageProcessor(do_resize=False,
+                                         do_rescale=False,
+                                         do_normalize=False,
+                                         ocr_lang='eng',
+                                         )
+        self.dataset.set_transform(self.processor)
+        self.collator = DataCollatorForLiltPretraining(self.tokenizer)
+
+    def processor(self,example):
+
+        images = [img.convert('RGB') for img in example['image']]
+
+        features = self.img_processor(images)
+        encoding = self.tokenizer(
+            text=features["words"],
+            boxes=features["boxes"],
+            return_special_tokens_mask=True,
+            return_tensors='pt',
+            max_length=512,
+            padding='max_length',
+            truncation=True
+        )
+        # encoding.pop('image')
+        # encoding['image']=example['image']
+        encoding['category']=torch.LongTensor(example['label'])
+        # encoding['words']=features["words"]
+        return encoding
     
     def prepare_data(self):
         self.labels = self.dataset['train'].features['label'].names
@@ -97,7 +121,7 @@ class LiltFineTuningDataModule(LightningDataModule):
         parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
         parser.add_argument("--data_dir", type=str, default="/work/scratch/hj36wegi/data")
         parser.add_argument('--batch_size', type=int, default=2)
-        parser.add_argument('--num_workers', type=int, default=4)
+        parser.add_argument('--num_workers', type=int, default=16)
         parser.add_argument('--task', type=str, default='funsd',choices=['funsd', 'cord'])
         parser.add_argument('--label_list', type=list, default=[])
         return parser

@@ -1002,7 +1002,8 @@ class LiltForPretraining(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
         if bbox_labels is not None:
             cai_loss = loss_fct(prediction_scores['cai_logits'].view(-1, 2), bbox_labels.view(-1)) # For align/not align
 
-        total_loss = masked_lm_loss + kpl_loss + cai_loss
+        total_loss = {'mvlm_loss': masked_lm_loss, 'kpl_loss': kpl_loss, 'cai_loss': cai_loss}
+
 
         if not return_dict:
             output = (prediction_scores,) + outputs[2:]

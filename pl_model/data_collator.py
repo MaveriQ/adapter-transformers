@@ -66,13 +66,8 @@ class DataCollatorForLiltPretraining(DataCollatorMixin):
     
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         self.bs = len(examples)
-        # Handle dict or lists with proper padding and conversion to tensor.
-        if isinstance(examples[0], Mapping):
-            batch = self.collate_fn(examples)
-        else:
-            batch = {
-                "input_ids": _torch_collate_batch(examples, self.tokenizer, pad_to_multiple_of=self.pad_to_multiple_of)
-            }
+
+        batch = {k:torch.stack([ex[k] for ex in examples],dim=0) for k in examples[0].keys()}
 
         batch = self.process_bounding_boxes(batch)
         # If special token mask has been preprocessed, pop it from the dict.
@@ -130,9 +125,13 @@ class DataCollatorForLiltPretraining(DataCollatorMixin):
 
         return inputs, labels
 
+    def get_box_number(self,x,y):
+        loc = int(y*10 + x) # Get the box number from the x and y coordinates of 10x10 grid.
+        if loc>99: # If the box number is greater than 99, it is out of bounds. Use -100 to skip precicting this box.
+            loc = -100
+        return loc
+    
     def process_bounding_boxes(self,batch):
-
-        get_box_number = lambda x,y: int(y*10 + x) # Get the box number from the x and y coordinates of 10x10 grid
 
         bs,seq,_ = batch['bbox'].shape
         all_boxes = batch['bbox'].view(-1,4)
@@ -144,9 +143,9 @@ class DataCollatorForLiltPretraining(DataCollatorMixin):
             ce_y = (tl_y + br_y)/2
 
             tl_x,tl_y,br_x,br_y,ce_x,ce_y = int(tl_x/100),int(tl_y/100),int(br_x/100),int(br_y/100),int(ce_x/100),int(ce_y/100)
-            tl = get_box_number(tl_x,tl_y)
-            br = get_box_number(br_x,br_y)
-            ce = get_box_number(ce_x,ce_y)
+            tl = self.get_box_number(tl_x,tl_y)
+            br = self.get_box_number(br_x,br_y)
+            ce = self.get_box_number(ce_x,ce_y)
 
             bbox_loc.append((tl,br,ce))
 
@@ -173,16 +172,44 @@ class DataCollatorForLiltPretraining(DataCollatorMixin):
         aligned_indices = masked_indices & ~indices_replaced & ~indices_random
 
         return masked_indices,indices_replaced,indices_random, misaligned_indices, aligned_indices
-  
-if __name__ == '__main__':
-    from datasets import load_from_disk
-    from transformers import LayoutXLMProcessor
 
-    dataset = load_from_disk('/work/scratch/hj36wegi/data/rvl_cdip_processed')
-    tokenizer = LayoutXLMProcessor.from_pretrained("microsoft/layoutxlm-base").tokenizer
+def process_example(example):
+    
+    images = [img.convert('RGB') for img in example['image']]
+    
+    features = img_processor(images)
+    encoding = tokenizer(
+        text=features["words"],
+        boxes=features["boxes"],
+        return_special_tokens_mask=True,
+        return_tensors='pt',
+        max_length=512,
+        padding='max_length',
+        truncation=True
+    )
+    # encoding.pop('image')
+    # encoding['image']=example['image']
+    # encoding['category']=torch.LongTensor(example['label'])
+    # encoding['words']=features["words"]
+    return encoding
+
+if __name__ == '__main__':
+    from datasets import load_from_disk, load_dataset
+    from transformers import LayoutLMv2ImageProcessor, LayoutXLMTokenizerFast
+
+    # dataset = load_from_disk('/work/scratch/hj36wegi/data/rvl_cdip_processed')
+    rvl_cdip = load_dataset('rvl_cdip')
+    img_processor = LayoutLMv2ImageProcessor(do_resize=False,
+                                         do_rescale=False,
+                                         do_normalize=False,
+                                         ocr_lang='eng',
+                                         )
+    tokenizer = LayoutXLMTokenizerFast.from_pretrained("SCUT-DLVCLab/lilt-infoxlm-base")
+
+    rvl_cdip.set_transform(process_example)
 
     bs = 4
-    examples = [dataset['train'][i] for i in range(bs)]
-    collate_fn = DataCollatorForLiltPretraining(tokenizer = tokenizer ,mlm_probability = 0.15,mlm = True)
+    examples = [rvl_cdip['train'][i] for i in range(bs)]
+    collate_fn = DataCollatorForLiltPretraining(tokenizer=tokenizer,seq_len=512)
     batch = collate_fn(examples)
     print(batch)
