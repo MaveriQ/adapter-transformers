@@ -28,8 +28,8 @@ class BertSelfOutputAdaptersMixin(AdapterLayer):
 class BertOutputAdaptersMixin(AdapterLayer):
     """Adds adapters to the BertOutput module."""
 
-    def __init__(self, modality,config):
-        super().__init__(f"{modality}_output_adapter", config)
+    def __init__(self):
+        super().__init__(f"output_adapter", None)
 
 
 class BertModelAdaptersMixin(EmbeddingAdaptersMixin, InvertibleAdaptersMixin, ModelAdaptersMixin):

@@ -15,25 +15,15 @@
 """PyTorch LiLT model."""
 
 import math
-from typing import Optional, Tuple, Union, Dict
+from typing import Optional, Tuple, Union
 
 import torch
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from ...activations import ACT2FN, gelu
-from ...adapters.composition import adjust_tensors_for_parallel
-from ...adapters.context import ForwardContext
-from ...adapters.lora import Linear as LoRALinear
-from ...adapters.mixins.lilt import (
-    LiltModelAdaptersMixin,
-    LiltModelWithHeadsAdaptersMixin,
-    LiltOutputAdaptersMixin,
-    LiltSelfOutputAdaptersMixin,
-)
+from ...activations import ACT2FN
 from ...modeling_outputs import (
-    ModelOutput,
     BaseModelOutput,
     BaseModelOutputWithPooling,
     QuestionAnsweringModelOutput,
@@ -42,18 +32,16 @@ from ...modeling_outputs import (
 )
 from ...modeling_utils import PreTrainedModel
 from ...pytorch_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
-from ...utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings, add_code_sample_docstrings
+from ...utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from .configuration_lilt import LiltConfig
-from dataclasses import dataclass
+
 
 logger = logging.get_logger(__name__)
 
-_CHECKPOINT_FOR_DOC = "SCUT-DLVCLab/lilt-infoxlm-base"
 _CONFIG_FOR_DOC = "LiltConfig"
 
 LILT_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "SCUT-DLVCLab/lilt-roberta-en-base",
-    "SCUT-DLVCLab/lilt-infoxlm-base"
     # See all LiLT models at https://huggingface.co/models?filter=lilt
 ]
 
@@ -202,7 +190,7 @@ class LiltLayoutEmbeddings(nn.Module):
 
 
 class LiltSelfAttention(nn.Module):
-    def __init__(self, config, position_embedding_type=None, location_key: Optional[str] = None):
+    def __init__(self, config, position_embedding_type=None):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
@@ -339,27 +327,24 @@ class LiltSelfAttention(nn.Module):
 
 
 # Copied from transformers.models.bert.modeling_bert.BertSelfOutput
-class LiltSelfOutput(LiltSelfOutputAdaptersMixin, nn.Module):
+class LiltSelfOutput(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.config = config
-
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self._init_adapter_modules()
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.adapter_layer_forward(hidden_states, input_tensor, self.LayerNorm)
+        hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
 
 
 class LiltAttention(nn.Module):
-    def __init__(self, config, position_embedding_type=None, location_key: Optional[str] = None):
+    def __init__(self, config, position_embedding_type=None):
         super().__init__()
-        self.self = LiltSelfAttention(config, position_embedding_type=position_embedding_type, location_key=location_key)
+        self.self = LiltSelfAttention(config, position_embedding_type=position_embedding_type)
         self.output = LiltSelfOutput(config)
         self.pruned_heads = set()
 
@@ -425,29 +410,17 @@ class LiltIntermediate(nn.Module):
 
 
 # Copied from transformers.models.bert.modeling_bert.BertOutput
-class LiltOutput(LiltOutputAdaptersMixin,nn.Module):
-    def __init__(self, config, modality):
-        super().__init__(modality,config)
-        self.config = config
-
+class LiltOutput(nn.Module):
+    def __init__(self, config):
+        super().__init__()
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self._init_adapter_modules()
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        # hidden_states = self.adapter_layer_forward(hidden_states, input_tensor, self.LayerNorm)
-        if self.config.adapters.active_setup is None:
-            # print("no adapter")
-            hidden_states = self.LayerNorm(hidden_states + input_tensor)
-        else:
-            for name,adapter in self.adapters.items():
-                if name in self.config.adapters.active_setup:
-                    # print("forward pass through : ",name)
-                    hidden_states,_,_ = adapter(hidden_states,input_tensor)
-            hidden_states = self.LayerNorm(hidden_states) 
+        hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
 
 
@@ -456,16 +429,16 @@ class LiltLayer(nn.Module):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.attention = LiltAttention(config, location_key="self")
+        self.attention = LiltAttention(config)
         self.intermediate = LiltIntermediate(config)
-        self.output = LiltOutput(config,modality="text")
+        self.output = LiltOutput(config)
 
         ori_hidden_size = config.hidden_size
         ori_intermediate_size = config.intermediate_size
         config.hidden_size = config.hidden_size // config.channel_shrink_ratio
         config.intermediate_size = config.intermediate_size // config.channel_shrink_ratio
         self.layout_intermediate = LiltIntermediate(config)
-        self.layout_output = LiltOutput(config,modality="layout")
+        self.layout_output = LiltOutput(config)
         config.hidden_size = ori_hidden_size
         config.intermediate_size = ori_intermediate_size
 
@@ -723,7 +696,7 @@ LILT_INPUTS_DOCSTRING = r"""
     "The bare LiLT Model transformer outputting raw hidden-states without any specific head on top.",
     LILT_START_DOCSTRING,
 )
-class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
+class LiltModel(LiltPreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     def __init__(self, config, add_pooling_layer=True):
@@ -736,7 +709,6 @@ class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
 
         self.pooler = LiltPooler(config) if add_pooling_layer else None
 
-        self._init_adapter_modules()
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -756,11 +728,10 @@ class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
 
     @add_start_docstrings_to_model_forward(LILT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @replace_return_docstrings(output_type=BaseModelOutputWithPooling, config_class=_CONFIG_FOR_DOC)
-    @ForwardContext.wrap
     def forward(
         self,
-        input_ids: torch.Tensor,
-        bbox: torch.Tensor,
+        input_ids: Optional[torch.Tensor] = None,
+        bbox: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
@@ -811,8 +782,8 @@ class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
         batch_size, seq_length = input_shape
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
-        # if bbox is None:
-        #     bbox = torch.zeros(input_shape + (4,), dtype=torch.long, device=device)
+        if bbox is None:
+            bbox = torch.zeros(input_shape + (4,), dtype=torch.long, device=device)
 
         if attention_mask is None:
             attention_mask = torch.ones(((batch_size, seq_length)), device=device)
@@ -842,7 +813,6 @@ class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
             token_type_ids=token_type_ids,
             inputs_embeds=inputs_embeds,
         )
-        embedding_output = self.invertible_adapters_forward(embedding_output)
 
         layout_embedding_output = self.layout_embeddings(bbox=bbox, position_ids=position_ids)
 
@@ -868,185 +838,6 @@ class LiltModel(LiltModelAdaptersMixin,LiltPreTrainedModel):
             attentions=encoder_outputs.attentions,
         )
 
-class TokenClassificationHead(nn.Module):
-    """Token Classification Head for Pretraining."""
-
-    def __init__(self, config,num_labels):
-        super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-
-        self.decoder = nn.Linear(config.hidden_size, num_labels, bias=False)
-        self.bias = nn.Parameter(torch.zeros(num_labels))
-        self.decoder.bias = self.bias
-
-    def forward(self, hidden_states, inv_lang_adapter=None):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = gelu(hidden_states)
-        hidden_states = self.layer_norm(hidden_states)
-
-        if inv_lang_adapter:
-            hidden_states = inv_lang_adapter(hidden_states, rev=True)
-
-        # project back to size of vocabulary with bias
-        x = self.decoder(hidden_states)
-        return x
-    
-class LiltPretrainingHeads(nn.Module): # TODO : Haris - Fix it
-    """Lilt Head for pretraining tasks."""
-
-    def __init__(self, config):
-        super().__init__()
-        self.mvlm_head = TokenClassificationHead(config, num_labels=config.vocab_size)
-        self.kpl_head = TokenClassificationHead(config, num_labels=300) # To classify 3 locations in 10x10 grid
-        self.cai_head = TokenClassificationHead(config, num_labels=2) # For align/not align
-
-    def forward(self, features, inv_lang_adapter=None):
-        mvlm_logits = self.mvlm_head(features, inv_lang_adapter=inv_lang_adapter)
-        kpl_logits = self.kpl_head(features, inv_lang_adapter=None)
-        cai_logits = self.cai_head(features, inv_lang_adapter=None)
-
-        return {"mvlm_logits": mvlm_logits, "kpl_logits": kpl_logits, "cai_logits": cai_logits}
-
-    def _tie_weights(self):
-        # To tie those two weights if they get disconnected (on TPU or when the bias is resized)
-        # For accelerate compatibility and to not break backward compatibility
-        if self.mvlm_head.decoder.bias.device.type == "meta":
-            self.mvlm_head.decoder.bias = self.bias
-        else:
-            self.bias = self.mvlm_head.decoder.bias
-
-@dataclass
-class LiltForPreTrainingOutput(ModelOutput):
-    """
-    Output type of [`LiltForPreTraining`].
-
-    Args:
-        loss (*optional*, returned when `labels` is provided, `torch.FloatTensor` of shape `(1,)`):
-            Total loss as the sum of the masked language modeling loss and the next sequence prediction
-            (classification) loss.
-        loss_dict (*optional*, returned when `labels_input` and `labels_bbox' are provided, `Dict`):
-            Dictionary containing the masked visual language modeling loss, Key Point Location loss and the CAI loss.
-        logits_dict (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
-            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax)
-            in the form of a Dictionary of mvlm_logits, kpl_logits and cai_logits.
-        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
-            Tuple of `torch.FloatTensor` (one for the output of the embeddings + one for the output of each layer) of
-            shape `(batch_size, sequence_length, hidden_size)`.
-
-            Hidden-states of the model at the output of each layer plus the initial embedding outputs.
-        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
-            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-            sequence_length)`.
-
-            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
-            heads.
-    """
-
-    loss: Optional[torch.FloatTensor] = None
-    loss_dict: Optional[Dict[str, torch.FloatTensor]] = None
-    logits_dict: Optional[Dict[str, torch.FloatTensor]] = None
-    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-    attentions: Optional[Tuple[torch.FloatTensor]] = None    
-
-@add_start_docstrings(
-    """LiLT Model with MVLM, CAI, KPL heads on top for Pretraining.""", LILT_START_DOCSTRING
-)
-class LiltForPretraining(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
-    _keys_to_ignore_on_save = [r"lm_head.decoder.weight", r"lm_head.decoder.bias"]
-    _keys_to_ignore_on_load_missing = [r"position_ids", r"lm_head.decoder.weight", r"lm_head.decoder.bias"]
-    _keys_to_ignore_on_load_unexpected = [r"pooler"]
-
-    def __init__(self, config):
-        super().__init__(config)
-
-        self.lilt = LiltModel(config, add_pooling_layer=False)
-        self.lm_head = LiltPretrainingHeads(config)
-        
-        # The LM head weights require special treatment only when they are tied with the word embeddings
-        self.update_keys_to_ignore(config, ["lm_head.decoder.weight"])
-
-        # Initialize weights and apply final processing
-        self.post_init()
-
-    def get_output_embeddings(self):
-        return self.lm_head.mvlm_head.decoder
-
-    def set_output_embeddings(self, new_embeddings):
-        self.lm_head.mvlm_head.decoder = new_embeddings
-
-    @add_start_docstrings_to_model_forward(LILT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
-    # @replace_return_docstrings(output_type=MaskedLMOutput, config_class=_CONFIG_FOR_DOC) TODO : Fox docstring error
-    def forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        bbox: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        token_type_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        input_labels: Optional[torch.LongTensor] = None,
-        bbox_labels: Optional[torch.Tensor] = None,
-        bbox_loc: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.Tensor], LiltForPreTrainingOutput]:
-        r"""
-        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Labels for computing the masked language modeling loss. Indices should be in `[-100, 0, ...,
-            config.vocab_size]` (see `input_ids` docstring) Tokens with indices set to `-100` are ignored (masked), the
-            loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`
-        kwargs (`Dict[str, any]`, optional, defaults to *{}*):
-            Used to hide legacy arguments that have been deprecated.
-        """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        outputs = self.lilt(
-            input_ids,
-            bbox,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-        sequence_output = outputs[0]
-        prediction_scores = self.lm_head(sequence_output,
-                                         inv_lang_adapter=self.lilt.get_invertible_adapter())
-
-        loss_fct = CrossEntropyLoss()
-
-        masked_lm_loss = 0.0
-        if input_labels is not None:
-            masked_lm_loss = loss_fct(prediction_scores['mvlm_logits'].view(-1, self.config.vocab_size), input_labels.view(-1))
-
-        kpl_loss = 0.0
-        if bbox_loc is not None:
-            kpl_loss = loss_fct(prediction_scores['kpl_logits'].view(-1, 100), bbox_loc.view(-1)) # For 10x10 grid classification
-
-        cai_loss = 0.0
-        if bbox_labels is not None:
-            cai_loss = loss_fct(prediction_scores['cai_logits'].view(-1, 2), bbox_labels.view(-1)) # For align/not align
-
-        loss_dict = {'mvlm_loss': masked_lm_loss, 'kpl_loss': kpl_loss, 'cai_loss': cai_loss}
-        loss = masked_lm_loss + kpl_loss + cai_loss
-
-        if not return_dict:
-            output = (prediction_scores,) + outputs[2:]
-            return ((loss_dict,) + output) if loss_dict is not None else output
-
-        return LiltForPreTrainingOutput(
-            loss=loss,
-            loss_dict=loss_dict,
-            logits_dict=prediction_scores,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
 
 @add_start_docstrings(
     """
@@ -1055,7 +846,7 @@ class LiltForPretraining(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
     """,
     LILT_START_DOCSTRING,
 )
-class LiltForSequenceClassification(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
+class LiltForSequenceClassification(LiltPreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     # Copied from transformers.models.roberta.modeling_roberta.RobertaForSequenceClassification.__init__ with Roberta->Lilt, roberta->lilt
@@ -1173,7 +964,7 @@ class LiltForSequenceClassification(LiltModelWithHeadsAdaptersMixin,LiltPreTrain
     """,
     LILT_START_DOCSTRING,
 )
-class LiltForTokenClassification(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
+class LiltForTokenClassification(LiltPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -1181,7 +972,6 @@ class LiltForTokenClassification(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedM
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
-        self.config = config
 
         self.lilt = LiltModel(config, add_pooling_layer=False)
         classifier_dropout = (
@@ -1301,7 +1091,7 @@ class LiltClassificationHead(nn.Module):
     """,
     LILT_START_DOCSTRING,
 )
-class LiltForQuestionAnswering(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedModel):
+class LiltForQuestionAnswering(LiltPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -1309,8 +1099,7 @@ class LiltForQuestionAnswering(LiltModelWithHeadsAdaptersMixin,LiltPreTrainedMod
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
-        self.config = config
-        
+
         self.lilt = LiltModel(config, add_pooling_layer=False)
         self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
 

@@ -27,9 +27,18 @@ from .prefix_tuning import PrefixTuningPool, PrefixTuningShim
 from .utils import EMBEDDING_FILE, TOKENIZER_PATH, inherit_doc
 from .wrappers.configuration import wrap_config
 
+class DuplicateFilter(logging.Filter):
+
+    def filter(self, record):
+        # add other fields if you need more granular comparison, depends on your app
+        current_log = (record.module, record.levelno, record.msg)
+        if current_log != getattr(self, "last_log", None):
+            self.last_log = current_log
+            return True
+        return False
 
 logger = logging.getLogger(__name__)
-
+logger.addFilter(DuplicateFilter())
 
 class InvertibleAdaptersMixin:
     """Mixin for Transformer models adding invertible adapters."""
@@ -834,7 +843,7 @@ class ModelAdaptersMixin(PushAdapterToHubMixin, ABC):
         active_adapters = getattr(self, "active_adapters", None) or AdapterSetup.get_context_adapter_setup()
         if not active_adapters:
             if self.has_adapters():
-                logger.warning("There are adapters available but none are activated for the forward pass.")
+                logger.warning("There are adapters available but none are activated for the forward pass. This warning will not be repeated")
             return
 
         context.adapters_parallelized = False
