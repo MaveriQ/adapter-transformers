@@ -438,16 +438,16 @@ class LiltOutput(LiltOutputAdaptersMixin,nn.Module):
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        # hidden_states = self.adapter_layer_forward(hidden_states, input_tensor, self.LayerNorm)
-        if self.config.adapters.active_setup is None:
-            # print("no adapter")
-            hidden_states = self.LayerNorm(hidden_states + input_tensor)
-        else:
-            for name,adapter in self.adapters.items():
-                if name in self.config.adapters.active_setup:
-                    # print("forward pass through : ",name)
-                    hidden_states,_,_ = adapter(hidden_states,input_tensor)
-            hidden_states = self.LayerNorm(hidden_states) 
+        hidden_states = self.adapter_layer_forward(hidden_states, input_tensor, self.LayerNorm)
+        # if self.config.adapters.active_setup is None:
+        #     # print("no adapter")
+        #     hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        # else:
+        #     for name,adapter in self.adapters.items():
+        #         if name in self.config.adapters.active_setup:
+        #             # print("forward pass through : ",name)
+        #             hidden_states,_,_ = adapter(hidden_states,input_tensor)
+        #     hidden_states = self.LayerNorm(hidden_states) 
         return hidden_states
 
 

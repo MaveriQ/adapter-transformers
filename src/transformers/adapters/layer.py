@@ -558,10 +558,10 @@ class AdapterLayer(AdapterLayerBase, nn.Module):
             else:
                 raise ValueError(f"Invalid adapter setup {adapter_setup}")
 
-            if len(self.adapters) == 1: # TODO : Fix the hack
-                last_adapter = self.adapters['layout']
-            else:
-                last_adapter = self.adapters[adapter_setup.last()]
+            # if len(self.adapters) == 1: # TODO : Fix the hack
+            #     last_adapter = self.adapters['layout']
+            # else:
+            last_adapter = self.adapters[adapter_setup.last()]
             hidden_states = last_adapter.post_forward(hidden_states, input_hidden_states, residual_input, layer_norm)
 
         elif layer_norm:
